@@ -1,0 +1,56 @@
+name: GoldDesk Bot Runner
+
+# Free runner: public repos get unlimited GitHub Actions minutes.
+# The bot code and its state stay in the PRIVATE repo golddesk-analyst (checked out with a token).
+# All bot output goes to a log file in the private repo – nothing about signals appears in these public logs.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run now (ignore the time window)"
+        type: boolean
+        default: true
+      briefing:
+        description: "Also send the Morning Briefing now"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: golddesk-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: tsuplika-maker/golddesk-analyst
+          token: ${{ secrets.ANALYST_PAT }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt > /dev/null 2>&1
+      - name: Run bot (output kept private)
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          FORCE_RUN: ${{ inputs.force }}
+          SEND_BRIEFING: ${{ inputs.briefing }}
+        run: |
+          mkdir -p logs
+          python -m analyst.main > logs/last_run.log 2>&1 && echo "bot ok" || echo "bot error (see logs/last_run.log in the private repo)"
+      - name: Save state + log to the private repo
+        run: |
+          git config user.name "golddesk-bot"
+          git config user.email "golddesk-bot@users.noreply.github.com"
+          git add state.json logs/last_run.log
+          if ! git diff --cached --quiet; then
+            git commit -q -m "Update bot state"
+            git pull -q --rebase origin main
+            git push -q
+          fi
+          echo "saved"
